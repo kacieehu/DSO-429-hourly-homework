@@ -108,21 +108,77 @@ def fetch_questions(attempts: int = 4) -> str:
     raise RuntimeError(f"could not download questions.csv: {last_error}")
 
 
+# Canonical field -> header spellings we will accept for it. The feed's
+# headers are not under my control, so a rename ("question" for
+# "question_text", "a" for "option_a") must not take the pipeline down.
+FIELD_ALIASES = {
+    "round_id": ("round_id", "round", "roundid", "round_number", "roundno", "round_num"),
+    "q_index": ("q_index", "qindex", "question_index", "q", "q_no", "qno",
+                "question_number", "index", "number"),
+    "released_at": ("released_at", "releasedat", "released", "release_time",
+                    "release_at", "timestamp", "published_at", "released_utc"),
+    "question_text": ("question_text", "question", "questiontext", "text",
+                      "prompt", "body", "stem"),
+    "option_a": ("option_a", "optiona", "a", "choice_a", "answer_a", "opt_a"),
+    "option_b": ("option_b", "optionb", "b", "choice_b", "answer_b", "opt_b"),
+    "option_c": ("option_c", "optionc", "c", "choice_c", "answer_c", "opt_c"),
+    "option_d": ("option_d", "optiond", "d", "choice_d", "answer_d", "opt_d"),
+}
+
+
+def _norm_header(h: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (h or "").strip().lower())
+
+
+def build_header_map(fieldnames) -> dict:
+    """Map canonical field -> the actual header in this file."""
+    present = {_norm_header(h): h for h in (fieldnames or []) if h}
+    mapping = {}
+    for canon, aliases in FIELD_ALIASES.items():
+        for alias in aliases:
+            key = _norm_header(alias)
+            if key in present:
+                mapping[canon] = present[key]
+                break
+    return mapping
+
+
 def parse_rows(text: str) -> list[dict]:
+    """Parse the feed into canonical dicts, tolerating renamed columns.
+
+    Returns rows keyed by the canonical names the rest of the script uses, so
+    a header change upstream is absorbed here rather than breaking everything
+    downstream.
+    """
     try:
-        rows = list(csv.DictReader(io.StringIO(text)))
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
     except Exception:  # noqa: BLE001
         return []
+
+    hmap = build_header_map(reader.fieldnames)
+    # Without these we genuinely cannot proceed.
+    if not {"round_id", "q_index", "question_text"} <= set(hmap):
+        log(f"  WARNING: feed headers not recognised: {reader.fieldnames}")
+        return []
+
     out = []
     for r in rows:
-        if not r.get("round_id") or not r.get("q_index"):
+        rid = r.get(hmap["round_id"])
+        qix = r.get(hmap["q_index"])
+        if rid is None or qix is None:
             continue
         try:
-            int(str(r["round_id"]).strip())
-            int(str(r["q_index"]).strip())
-        except ValueError:
+            int(str(rid).strip())
+            int(str(qix).strip())
+        except (ValueError, TypeError):
             continue
-        out.append(r)
+        canon = {canon: r.get(src, "") for canon, src in hmap.items()}
+        # Any option column that is absent becomes an empty string rather than
+        # a missing key, so option handling never raises.
+        for letter in "abcd":
+            canon.setdefault(f"option_{letter}", "")
+        out.append(canon)
     return out
 
 
@@ -411,30 +467,56 @@ def existing_answers(round_id: int):
 
 
 def solve_round(round_id: int, rows: list[dict]):
-    """Return (answers dict, list of unsolved q_index)."""
+    """Return (answers, unsolved q_index list, llm-rescued q_index list).
+
+    Three tiers, in order:
+      1. the deterministic template solver - exact, and all that practice
+         rounds ever need;
+      2. an LLM fallback, for a question type that never appeared in practice;
+      3. a fixed letter, so the file is always valid JSON worth partial credit
+         rather than a missing file worth zero.
+    """
     by_index = {}
     for r in rows:
         by_index[int(str(r["q_index"]).strip())] = r
 
-    answers, unsolved = {}, []
+    answers, unsolved, rescued = {}, [], []
     for i in range(1, 26):
         row = by_index.get(i)
         letter = None
+        opts = ["", "", "", ""]
+        question = ""
         if row:
+            question = row.get("question_text", "")
             opts = [row.get("option_a", ""), row.get("option_b", ""),
                     row.get("option_c", ""), row.get("option_d", "")]
             try:
-                letter, _conf = pick_letter(row.get("question_text", ""), opts)
+                letter, _conf = pick_letter(question, opts)
             except Exception as exc:  # noqa: BLE001 - never let one question stop a round
                 log(f"    q{i}: solver error: {exc}")
                 letter = None
+
+        if letter is None and question and any(o for o in opts):
+            # Unknown template: hand this one question to a model.
+            try:
+                import llm_fallback
+
+                letter, provider = llm_fallback.answer(question, opts, log=log)
+                if letter:
+                    rescued.append(i)
+                    log(f"    q{i}: no template matched; answered {letter} "
+                        f"via {provider}")
+            except Exception as exc:  # noqa: BLE001 - fallback must never raise
+                log(f"    q{i}: llm fallback unavailable: {exc}")
+                letter = None
+
         if letter is None:
             unsolved.append(i)
             # A valid file with a guess scores partial credit; a missing or
             # invalid file scores zero. Always emit a legal letter.
             letter = "A"
         answers[f"q{i}"] = letter
-    return answers, unsolved
+    return answers, unsolved, rescued
 
 
 def write_round(round_id: int, answers: dict) -> None:
@@ -474,6 +556,8 @@ def main() -> int:
     old_flagged = {str(k): v for k, v in state["flagged"].items()}
 
     wrote, skipped, incomplete, flagged, locked = [], 0, [], [], []
+    rescued_rounds = {}          # rounds an LLM had to rescue a question in
+    new_templates = {}           # unrecognised question wording, for the alert
 
     for round_id in sorted(by_round):
         rrows = by_round[round_id]
@@ -499,13 +583,29 @@ def main() -> int:
             skipped += 1
             continue
 
-        answers, unsolved = solve_round(round_id, rrows)
+        answers, unsolved, rescued = solve_round(round_id, rrows)
         write_round(round_id, answers)
         wrote.append(round_id)
+
+        # Record the wording of anything the template solver did not know, so
+        # the alert can show it and a formula can be added.
+        if unsolved or rescued:
+            by_index = {int(str(r["q_index"]).strip()): r for r in rrows}
+            for qi in sorted(set(unsolved) | set(rescued)):
+                row = by_index.get(qi)
+                if row:
+                    new_templates[f"r{round_id}q{qi}"] = \
+                        row.get("question_text", "")[:300]
+
+        if rescued:
+            rescued_rounds[str(round_id)] = rescued
         if unsolved:
             flagged.append((round_id, unsolved))
             log(f"  round {round_id}: WROTE with {len(unsolved)} guessed "
                 f"question(s): {unsolved}")
+        elif rescued:
+            log(f"  round {round_id}: 25/25, but {len(rescued)} answered by "
+                f"LLM fallback: {rescued}")
         else:
             verb = "re-solved" if have else "solved"
             log(f"  round {round_id}: {verb} 25/25")
@@ -522,6 +622,8 @@ def main() -> int:
         log(f"partial rounds   : {incomplete} (will retry next run)")
     if flagged:
         log(f"NEEDS ATTENTION  : rounds with guesses {flagged}")
+    if rescued_rounds:
+        log(f"LLM-rescued      : {rescued_rounds}")
     if locked:
         log(f"locked (past 3h) : {locked}")
 
@@ -531,6 +633,8 @@ def main() -> int:
         "skipped": skipped,
         "incomplete": [r for r, _ in incomplete],
         "flagged": {str(r): u for r, u in flagged},
+        "rescued": rescued_rounds,
+        "new_templates": new_templates,
         "feed_max_round": max(by_round),
     }
     out = os.environ.get("GITHUB_OUTPUT")
@@ -539,6 +643,7 @@ def main() -> int:
             fh.write(f"wrote_count={len(wrote)}\n")
             fh.write(f"wrote_rounds={','.join(str(r) for r in wrote)}\n")
             fh.write(f"flagged_count={len(flagged)}\n")
+            fh.write(f"rescued_count={len(rescued_rounds)}\n")
             fh.write(f"summary={json.dumps(summary)}\n")
     return 0
 

@@ -1,0 +1,76 @@
+name: Self-test - prove the safety nets work
+
+# Checks the parts of the pipeline that normally never run, so a
+# misconfiguration cannot sit hidden until the moment it is needed:
+#   - the LLM fallback used when a question matches no known template
+#   - the deterministic solver, against the published practice keys
+#
+# Runs daily and on demand. It is deliberately separate from the hourly job:
+# if GitHub Models is rate-limited or down, that must never stop a round from
+# being submitted.
+on:
+  schedule:
+    - cron: "25 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Deterministic solver vs practice keys
+        run: |
+          python3 scripts/test_variants.py
+          python3 scripts/validate.py
+
+      - name: LLM fallback reachable and correct
+        id: llm
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set +e
+          python3 scripts/test_llm.py | tee llm.txt
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report the fallback's status
+        run: |
+          case "${{ steps.llm.outputs.code }}" in
+            0) echo "LLM fallback: ARMED and correct" ;;
+            2) echo "LLM fallback: NOT CONFIGURED - a brand-new question type would get a fixed letter" ;;
+            *) echo "LLM fallback: REACHABLE BUT WRONG - needs attention" ;;
+          esac
+
+      - name: Raise an issue if the fallback is broken
+        # Only when it answered incorrectly. "Not configured" is a known state
+        # and does not need a daily issue.
+        if: steps.llm.outputs.code != '0' && steps.llm.outputs.code != '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let report = '(no output)';
+            try { report = fs.readFileSync('llm.txt', 'utf8').slice(0, 50000); } catch (e) {}
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'ALERT: the LLM fallback is reachable but answering wrongly',
+              body: `The safety net for new question types is not trustworthy.\n\n\`\`\`\n${report}\n\`\`\`\n\nRun log: ${url}`,
+              labels: ['automation-alert'],
+            });
