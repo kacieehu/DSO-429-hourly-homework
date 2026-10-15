@@ -1,0 +1,164 @@
+name: Solve and submit quiz rounds
+
+# Runs entirely on GitHub's servers - nothing needs to be running on my laptop.
+#
+# Four times an hour, not once: a scheduled GitHub Actions run can be delayed
+# by 10-30 minutes under load, and the questions file itself can lag the
+# release by up to five minutes. Four tries an hour keeps every round far
+# inside the three-hour 100% timing window even if several runs are late or
+# skipped entirely.
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:          # lets me run it by hand from the Actions tab
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/solve.yml"
+
+permissions:
+  contents: write             # to commit the answer files
+  issues: write               # to open an alert issue if something breaks
+
+# Never let two runs push at once, and never cancel a run that may be
+# mid-commit - queue it instead.
+concurrency:
+  group: solve-quiz
+  cancel-in-progress: false
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Solve every unanswered round
+        id: solve
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/solve.py
+
+      - name: Commit and push the answers
+        id: push
+        run: |
+          set -euo pipefail
+          git config user.name  "dso429-quiz-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A answers state
+          if git diff --cached --quiet; then
+            echo "nothing new to commit"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git commit -m "Answers: rounds ${{ steps.solve.outputs.wrote_rounds }}"
+
+          # Another run (or a manual commit) may have landed first; rebase and
+          # retry rather than failing the submission.
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              echo "pushed on attempt $attempt"
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "push rejected, rebasing (attempt $attempt)"
+            git pull --rebase --autostash origin main || true
+            sleep $((attempt * 5))
+          done
+
+          echo "push failed after 5 attempts"
+          exit 1
+
+      - name: Verify the answers really are on main
+        if: steps.push.outputs.pushed == 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          # Every answer file we hold must exist in the remote main tree.
+          missing=0
+          for f in answers/round-*.json; do
+            if ! git cat-file -e "origin/main:$f" 2>/dev/null; then
+              echo "NOT ON REMOTE: $f"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            echo "$missing answer file(s) did not reach origin/main"
+            exit 1
+          fi
+          echo "all $(ls answers/round-*.json | wc -l) answer files confirmed on origin/main"
+
+      - name: Regression-test the solver against the practice keys
+        # Cheap insurance: if a future feed change breaks a formula, this fails
+        # and the alert step below emails me.
+        run: python3 scripts/validate.py
+
+      - name: Open an alert issue if anything failed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'ALERT: hourly quiz automation failed';
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'automation-alert',
+            });
+            const body = `The scheduled solver run failed.\n\nRun log: ${url}\n\nTime: ${new Date().toISOString()}`;
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['automation-alert'],
+              });
+            }
+
+      - name: Open an alert issue if a question could not be solved
+        if: success() && steps.solve.outputs.flagged_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const summary = `${{ steps.solve.outputs.summary }}`;
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'ALERT: a quiz question did not match any known template',
+              body: [
+                'A round was submitted with at least one guessed answer, so a new',
+                'question type has probably appeared. The file is valid JSON and',
+                'still earns partial credit, and the solver will re-solve the round',
+                'automatically for three hours after release - so a fix pushed',
+                'within that window is picked up.',
+                '',
+                '```json',
+                summary,
+                '```',
+                '',
+                `Run log: ${url}`,
+              ].join('\n'),
+              labels: ['automation-alert'],
+            });
