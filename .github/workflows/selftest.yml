@@ -35,6 +35,12 @@ jobs:
           python3 scripts/test_variants.py
           python3 scripts/validate.py
 
+      - name: Diagnose GitHub Models endpoint
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/diag_llm.py
+
       - name: LLM fallback reachable and correct
         id: llm
         continue-on-error: true
