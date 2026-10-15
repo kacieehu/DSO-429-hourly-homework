@@ -56,29 +56,35 @@ jobs:
           git config user.name  "dso429-quiz-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -A answers state
-          if git diff --cached --quiet; then
-            echo "nothing new to commit"
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # On rejection we do NOT try to merge or rebase: a half-resolved
+          # conflict could push a file with conflict markers in it, which would
+          # be graded as not-submitted. Instead we take the remote as truth,
+          # throw our work away and solve again. The solver is deterministic
+          # and idempotent, so this always converges on the same answers.
+          for attempt in 1 2 3 4 5 6; do
+            git add -A answers state
+            if git diff --cached --quiet; then
+              echo "nothing new to commit"
+              echo "pushed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
 
-          git commit -m "Answers: rounds ${{ steps.solve.outputs.wrote_rounds }}"
+            git commit -q -m "Answers: rounds ${{ steps.solve.outputs.wrote_rounds }}"
 
-          # Another run (or a manual commit) may have landed first; rebase and
-          # retry rather than failing the submission.
-          for attempt in 1 2 3 4 5; do
             if git push origin HEAD:main; then
               echo "pushed on attempt $attempt"
               echo "pushed=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "push rejected, rebasing (attempt $attempt)"
-            git pull --rebase --autostash origin main || true
+
+            echo "push rejected (attempt $attempt) - resetting to origin/main and re-solving"
+            git fetch origin main
+            git reset --hard origin/main
+            python3 scripts/solve.py
             sleep $((attempt * 5))
           done
 
-          echo "push failed after 5 attempts"
+          echo "push failed after 6 attempts"
           exit 1
 
       - name: Verify the answers really are on main

@@ -349,11 +349,22 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
+    """Write the state file only if its content actually changed.
+
+    No timestamps live in here on purpose. A field that moves every run would
+    produce a commit every 15 minutes and, worse, make this the one file two
+    runs can conflict on.
+    """
+    body = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    try:
+        with open(STATE_PATH, encoding="utf-8") as fh:
+            if fh.read() == body:
+                return
+    except OSError:
+        pass
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    state["updated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     with open(STATE_PATH, "w", encoding="utf-8") as fh:
-        json.dump(state, fh, indent=2, sort_keys=True)
-        fh.write("\n")
+        fh.write(body)
 
 
 def released_at(rows: list[dict]):
@@ -499,10 +510,10 @@ def main() -> int:
             verb = "re-solved" if have else "solved"
             log(f"  round {round_id}: {verb} 25/25")
 
-    state["flagged"] = {str(r): u for r, u in flagged}
-    state["feed_max_round"] = max(by_round)
-    state["last_run_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
-    save_state(state)
+    save_state({
+        "flagged": {str(r): u for r, u in flagged},
+        "feed_max_round": max(by_round),
+    })
 
     log("")
     log(f"already answered : {skipped}")
