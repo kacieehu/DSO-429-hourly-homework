@@ -106,10 +106,12 @@ jobs:
           fi
           echo "all $(ls answers/round-*.json | wc -l) answer files confirmed on origin/main"
 
-      - name: Regression-test the solver against the practice keys
+      - name: Regression-test the solver
         # Cheap insurance: if a future feed change breaks a formula, this fails
         # and the alert step below emails me.
-        run: python3 scripts/validate.py
+        run: |
+          python3 scripts/test_variants.py
+          python3 scripts/validate.py
 
       - name: Open an alert issue if anything failed
         if: failure()
