@@ -51,3 +51,13 @@ show("inference models.github.ai openai/gpt-4o-mini",
 show("azure endpoint gpt-4o-mini",
      "https://models.inference.ai.azure.com/chat/completions",
      {"model": "gpt-4o-mini", "messages": msgs, "temperature": 0})
+
+# Characterise what egress this runner actually has.
+show("anthropic api (no key, expect 401 JSON if reachable)",
+     "https://api.anthropic.com/v1/messages",
+     {"model": "claude-haiku-5-5", "max_tokens": 10,
+      "messages": [{"role": "user", "content": "hi"}]},
+     extra={"anthropic-version": "2023-06-01"})
+show("raw.githubusercontent (known good)",
+     "https://raw.githubusercontent.com/FaisalXL/dso429-hourly-quiz/main/practice_keys.csv")
+show("example.com (neutral third party)", "https://example.com")
