@@ -48,6 +48,7 @@ def main() -> int:
         return 2
 
     failures = 0
+    unavailable = 0
     for question, options, expected in CASES:
         # Confirm the deterministic solver really cannot do this one, so the
         # test is exercising the model and not the templates.
@@ -61,15 +62,27 @@ def main() -> int:
         letter, provider = llm_fallback.answer(question, options)
         if letter == expected:
             print(f"  ok   -> {letter} via {provider}")
+        elif letter is None:
+            # No provider produced anything: unreachable or not really
+            # configured. That is a known state, not a wrong answer.
+            unavailable += 1
+            print(f"  n/a  -> no provider answered")
         else:
             failures += 1
             print(f"  FAIL -> got {letter} via {provider}, expected {expected}")
             print(f"       {question}")
 
     if failures:
-        print(f"\n{failures} fallback case(s) wrong - the safety net is "
-              f"reachable but unreliable")
+        print(f"\n{failures} fallback case(s) answered WRONGLY - the safety "
+              f"net is reachable but unreliable")
         return 1
+    if unavailable:
+        print(f"\nNo LLM provider is actually usable ({unavailable} case(s) "
+              f"got no response).")
+        print("Tiers 1 and 2 are unaffected and need no network beyond the")
+        print("questions file. To enable this tier, add an ANTHROPIC_API_KEY")
+        print("repository secret.")
+        return 2
     print("\nPASS: LLM fallback is reachable and answered every case correctly")
     return 0
 

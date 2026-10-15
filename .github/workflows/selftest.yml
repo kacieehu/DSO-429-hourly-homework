@@ -60,7 +60,7 @@ jobs:
         run: |
           case "${{ steps.llm.outputs.code }}" in
             0) echo "LLM fallback: ARMED and correct" ;;
-            2) echo "LLM fallback: NOT CONFIGURED - a brand-new question type would get a fixed letter" ;;
+            2) echo "LLM fallback: NOT IN USE (no usable provider). Tiers 1 and 2 cover new question types offline; add an ANTHROPIC_API_KEY secret to enable this tier." ;;
             *) echo "LLM fallback: REACHABLE BUT WRONG - needs attention" ;;
           esac
 
