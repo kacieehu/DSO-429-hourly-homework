@@ -34,6 +34,9 @@ import urllib.request
 
 LETTERS = ("A", "B", "C", "D")
 
+# Set once a provider proves non-functional, so we stop paying for retries.
+_GITHUB_MODELS_DEAD = False
+
 GITHUB_MODELS_URL = "https://models.github.ai/inference/chat/completions"
 GITHUB_MODELS_MODEL = os.environ.get("GH_MODEL", "openai/gpt-4.1")
 
@@ -65,10 +68,28 @@ def _post_json(url: str, payload: dict, headers: dict, timeout: int = 60):
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+        raw = resp.read().decode("utf-8", errors="replace")
+        ctype = resp.headers.get("Content-Type", "") or ""
+    if "json" not in ctype.lower():
+        raise RuntimeError(
+            f"expected JSON, got {ctype or 'unknown'}: {raw[:80]!r}"
+        )
+    return json.loads(raw)
 
 
 def _ask_github_models(prompt: str):
+    """GitHub Models, free with the workflow token.
+
+    Measured note: on the runner this repository actually uses, this endpoint
+    is intercepted - every request, including a plain catalog GET, comes back
+    as 200 text/plain "OK" rather than JSON. That is detected here and the
+    provider is marked dead for the rest of the process instead of retrying,
+    so it costs one quick request and then gets out of the way. It is kept
+    because it is free and may work on a different runner.
+    """
+    global _GITHUB_MODELS_DEAD
+    if _GITHUB_MODELS_DEAD:
+        return None
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         return None
@@ -86,7 +107,14 @@ def _ask_github_models(prompt: str):
             "User-Agent": "dso429-hw3-solver",
         },
     )
-    return body["choices"][0]["message"]["content"]
+    try:
+        return body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        _GITHUB_MODELS_DEAD = True
+        raise RuntimeError(
+            "GitHub Models returned no choices (endpoint appears intercepted); "
+            "skipping it for the rest of this run"
+        ) from None
 
 
 def _ask_anthropic(prompt: str):

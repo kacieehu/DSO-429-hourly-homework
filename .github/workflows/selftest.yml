@@ -35,11 +35,13 @@ jobs:
           python3 scripts/test_variants.py
           python3 scripts/validate.py
 
-      - name: Diagnose GitHub Models endpoint
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/diag_llm.py
+      - name: Offline fallback for unknown question types
+        # Must stay perfect on the practice set, and is also reported in its
+        # honest "no hints" mode so the margin is visible in the log.
+        run: |
+          python3 scripts/test_generic.py
+          echo "--- held-out mode: formula shapes with no keyword hint ---"
+          python3 scripts/test_generic.py --no-hints
 
       - name: LLM fallback reachable and correct
         id: llm
