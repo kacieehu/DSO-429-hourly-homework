@@ -42,6 +42,31 @@ jobs:
           python3 scripts/audit.py | tee audit.txt
           echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
+      - name: Confirm GitHub's scheduler is actually firing
+        id: scheduler
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Scheduled runs are best-effort. If none has fired in the last two
+          # hours, the hourly job is not really running and the backup trigger
+          # in docs/external-trigger.md is needed.
+          since=$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+                  || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ)
+          count=$(gh api "repos/${{ github.repository }}/actions/workflows/solve.yml/runs?event=schedule&created=>$since" --jq '.total_count' 2>/dev/null || echo 0)
+          echo "scheduled runs since $since: $count"
+          if [ "${count:-0}" -eq 0 ]; then
+            {
+              echo ""
+              echo "GitHub's scheduler has not fired for solve.yml since $since."
+              echo "Rounds are only being submitted if something else is triggering the workflow."
+              echo "Set up the backup trigger in docs/external-trigger.md."
+            } | tee -a audit.txt
+            echo "code=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Confirm the repository is still public
         id: visibility
         env:
@@ -58,7 +83,7 @@ jobs:
           fi
 
       - name: Raise an issue if coverage is incomplete
-        if: steps.audit.outputs.code != '0' || steps.visibility.outputs.code != '0'
+        if: steps.audit.outputs.code != '0' || steps.visibility.outputs.code != '0' || steps.scheduler.outputs.code != '0'
         uses: actions/github-script@v7
         with:
           script: |
@@ -74,5 +99,5 @@ jobs:
             });
 
       - name: Fail the run so it shows red in the Actions tab
-        if: steps.audit.outputs.code != '0' || steps.visibility.outputs.code != '0'
+        if: steps.audit.outputs.code != '0' || steps.visibility.outputs.code != '0' || steps.scheduler.outputs.code != '0'
         run: exit 1

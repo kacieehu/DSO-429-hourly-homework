@@ -9,7 +9,11 @@ name: Solve and submit quiz rounds
 # skipped entirely.
 on:
   schedule:
-    - cron: "7,22,37,52 * * * *"
+    # Every 10 minutes. GitHub's scheduler is best-effort and drops or delays
+    # runs under load, so density is the cheap defence: a round needs only one
+    # of the ~18 attempts inside its three-hour 100% window to succeed.
+    # Public repositories get unlimited Actions minutes and each run is ~15s.
+    - cron: "*/10 * * * *"
   workflow_dispatch:          # lets me run it by hand from the Actions tab
   push:
     branches: [main]

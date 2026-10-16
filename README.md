@@ -8,7 +8,7 @@ the whole week.
 
 ## How it works
 
-Four times an hour (`:07`, `:22`, `:37`, `:52`), the
+Every 10 minutes, the
 [solve workflow](.github/workflows/solve.yml):
 
 1. downloads [`questions.csv`](https://github.com/FaisalXL/dso429-hourly-quiz/blob/main/questions.csv),
@@ -19,12 +19,18 @@ Four times an hour (`:07`, `:22`, `:37`, `:52`), the
 5. commits and pushes to `main`, then re-fetches `main` to confirm the files
    actually arrived.
 
-### Why four runs an hour
+### Why every 10 minutes
 
-A scheduled Actions run can be delayed 10–30 minutes under load, and the
-questions file itself can lag a release by up to five minutes. Timing credit is
-100% for three hours after release, so four attempts an hour keep every round
-far inside that window even if several runs are late or dropped entirely.
+A scheduled Actions run is best-effort: GitHub delays them under load and
+drops them outright during incidents, and the questions file itself can lag a
+release by up to five minutes. Timing credit is 100% for three hours after
+release, so a round has ~18 chances and needs only one. A public repository
+gets unlimited Actions minutes and each run takes about 15 seconds.
+
+**Known risk, stated plainly:** if GitHub's scheduler stops firing entirely,
+every attempt stops with it. The watchdog catches that and emails, and
+`docs/external-trigger.md` sets up a backup trigger that does not depend on
+GitHub's scheduler at all.
 
 ### How the answers are computed
 
@@ -104,7 +110,7 @@ network beyond the questions file.
 
 | Risk | What handles it |
 | --- | --- |
-| A scheduled run is late or skipped | Four runs an hour; a round is picked up by any later run |
+| A scheduled run is late or skipped | A run every 10 minutes; a round is picked up by any later run |
 | The questions file is slow to update | Two independent sources (GitHub API, then raw CDN), cache-busted, with retries and backoff; the fullest copy wins |
 | A round is half-published when we look | Rounds with fewer than 25 questions are left for the next run, so a guess is never locked in for a question that has not appeared yet |
 | Two runs push at once | `concurrency` queues runs; the push step rebases and retries five times |
