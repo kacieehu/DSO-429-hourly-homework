@@ -27,10 +27,15 @@ release by up to five minutes. Timing credit is 100% for three hours after
 release, so a round has ~18 chances and needs only one. A public repository
 gets unlimited Actions minutes and each run takes about 15 seconds.
 
-**Known risk, stated plainly:** if GitHub's scheduler stops firing entirely,
-every attempt stops with it. The watchdog catches that and emails, and
-`docs/external-trigger.md` sets up a backup trigger that does not depend on
-GitHub's scheduler at all.
+**GitHub's scheduler has never fired for this repository.** Over 75 minutes of
+observation it produced zero `schedule` events while push- and
+dispatch-triggered runs worked normally. So the workflow is driven by an
+**external trigger** instead (`docs/external-trigger.md`): a free scheduler
+calls the GitHub API every 10 minutes. Verified working at 00:30 UTC on
+16 October 2026.
+
+Both triggers stay enabled. They fail for different reasons, and the watchdog
+alerts only if *neither* has run the solver in the last two hours.
 
 ### How the answers are computed
 

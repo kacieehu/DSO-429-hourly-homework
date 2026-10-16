@@ -48,23 +48,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Scheduled runs are best-effort. If none has fired in the last two
-          # hours, the hourly job is not really running and the backup trigger
-          # in docs/external-trigger.md is needed.
+          # The solver is driven by two independent triggers: GitHub's own
+          # scheduler and an external caller (docs/external-trigger.md). What
+          # matters is that SOMETHING is still driving it, so count both and
+          # only alert when the job has gone completely quiet.
           since=$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
                   || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ)
-          count=$(gh api "repos/${{ github.repository }}/actions/workflows/solve.yml/runs?event=schedule&created=>$since" --jq '.total_count' 2>/dev/null || echo 0)
-          echo "scheduled runs since $since: $count"
-          if [ "${count:-0}" -eq 0 ]; then
+          sched=$(gh api "repos/${{ github.repository }}/actions/workflows/solve.yml/runs?event=schedule&created=>$since" --jq '.total_count' 2>/dev/null || echo 0)
+          disp=$(gh api "repos/${{ github.repository }}/actions/workflows/solve.yml/runs?event=workflow_dispatch&created=>$since" --jq '.total_count' 2>/dev/null || echo 0)
+          total=$(( ${sched:-0} + ${disp:-0} ))
+          echo "since $since -> schedule: ${sched:-0}, external dispatch: ${disp:-0}"
+
+          if [ "$total" -eq 0 ]; then
             {
               echo ""
-              echo "GitHub's scheduler has not fired for solve.yml since $since."
-              echo "Rounds are only being submitted if something else is triggering the workflow."
-              echo "Set up the backup trigger in docs/external-trigger.md."
+              echo "NOTHING has run solve.yml since $since - neither GitHub's"
+              echo "scheduler nor the external trigger. Rounds are not being"
+              echo "submitted. Check docs/external-trigger.md: the token may have"
+              echo "expired, or the cron job may have auto-disabled after repeated"
+              echo "failures."
             } | tee -a audit.txt
             echo "code=1" >> "$GITHUB_OUTPUT"
           else
             echo "code=0" >> "$GITHUB_OUTPUT"
+            # Not an alert, but worth seeing in the log: running on one leg.
+            if [ "${sched:-0}" -eq 0 ]; then
+              echo "note: GitHub's scheduler is not firing; the external trigger is carrying it"
+            fi
+            if [ "${disp:-0}" -eq 0 ]; then
+              echo "note: no external dispatches; GitHub's scheduler is carrying it"
+            fi
           fi
 
       - name: Confirm the repository is still public
