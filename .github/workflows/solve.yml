@@ -9,11 +9,18 @@ name: Solve and submit quiz rounds
 # skipped entirely.
 on:
   schedule:
-    # Every 10 minutes. GitHub's scheduler is best-effort and drops or delays
-    # runs under load, so density is the cheap defence: a round needs only one
-    # of the ~18 attempts inside its three-hour 100% window to succeed.
-    # Public repositories get unlimited Actions minutes and each run is ~15s.
-    - cron: "*/10 * * * *"
+    # Every 5 minutes, offset by one, so the slots sit at :01, :06, :11, ...
+    #
+    # Rounds are released at the top of the hour, but the observed release of
+    # round 49 was stamped 21:01:39 and GitHub can take up to five minutes to
+    # show it in questions.csv. A run at :00 is therefore too early to be
+    # useful, and the old */10 schedule meant waiting until :10.
+    #
+    # :01 catches the round when the feed updates promptly, and :06 catches it
+    # after the worst-case five-minute lag. The rest give ~36 attempts inside
+    # each round's three-hour 100% window, of which only one needs to succeed.
+    # Public repositories get unlimited Actions minutes; each run is ~15s.
+    - cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
   workflow_dispatch:          # lets me run it by hand from the Actions tab
   push:
     branches: [main]

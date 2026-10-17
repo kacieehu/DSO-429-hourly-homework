@@ -6,7 +6,7 @@ them during incidents. If it stops firing entirely, nothing in GitHub itself
 will restart it.
 
 This sets up a second, fully independent trigger. A free external cron service
-calls the GitHub API every 10 minutes and asks the workflow to run. It does not
+calls the GitHub API every 5 minutes and asks the workflow to run. It does not
 depend on GitHub's scheduler, so the two fail for different reasons.
 
 **You only need this if the Actions tab shows no runs with the trigger
@@ -42,8 +42,18 @@ Using **cron-job.org** (free, no card):
    ```
    https://api.github.com/repos/kacieehu/DSO-429-hourly-homework/actions/workflows/solve.yml/dispatches
    ```
-5. **Schedule:** every 10 minutes (select *Every 10 minutes*, or custom
-   `*/10 * * * *`)
+5. **Schedule:** choose **custom / expression** and enter
+
+   ```
+   1,6,11,16,21,26,31,36,41,46,51,56 * * * *
+   ```
+
+   That is every 5 minutes, offset by one, so runs land at :01, :06, :11 and
+   so on. The offset matters: rounds are released at the top of the hour but
+   can take up to five minutes to appear in `questions.csv`, so a run at :00
+   sees nothing. `:01` catches a prompt update and `:06` catches the
+   worst-case lag. (If the UI only offers fixed intervals, *every 5 minutes*
+   is nearly as good.)
 6. Open **Advanced**:
    - **Request method:** `POST`
    - **Request body:**

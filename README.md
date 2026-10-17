@@ -8,7 +8,7 @@ the whole week.
 
 ## How it works
 
-Every 10 minutes, the
+Every 5 minutes, at :01, :06, :11 and so on past the hour, the
 [solve workflow](.github/workflows/solve.yml):
 
 1. downloads [`questions.csv`](https://github.com/FaisalXL/dso429-hourly-quiz/blob/main/questions.csv),
@@ -19,19 +19,25 @@ Every 10 minutes, the
 5. commits and pushes to `main`, then re-fetches `main` to confirm the files
    actually arrived.
 
-### Why every 10 minutes
+### Why :01 and :06, every 5 minutes
 
 A scheduled Actions run is best-effort: GitHub delays them under load and
 drops them outright during incidents, and the questions file itself can lag a
 release by up to five minutes. Timing credit is 100% for three hours after
-release, so a round has ~18 chances and needs only one. A public repository
+release, so a round has ~36 chances and needs only one. A public repository
 gets unlimited Actions minutes and each run takes about 15 seconds.
+
+The slots are offset by a minute on purpose. Rounds are released at the top of
+the hour, but round 49's release was stamped `21:01:39` and GitHub can take up
+to five minutes to show a new round in `questions.csv`. So a run at `:00` is
+too early to see anything: `:01` catches a prompt feed update, and `:06`
+catches the worst-case five-minute lag.
 
 **GitHub's scheduler has never fired for this repository.** Over 75 minutes of
 observation it produced zero `schedule` events while push- and
 dispatch-triggered runs worked normally. So the workflow is driven by an
 **external trigger** instead (`docs/external-trigger.md`): a free scheduler
-calls the GitHub API every 10 minutes. Verified working at 00:30 UTC on
+calls the GitHub API every 5 minutes. Verified working at 00:30 UTC on
 16 October 2026.
 
 Both triggers stay enabled. They fail for different reasons, and the watchdog
@@ -115,7 +121,7 @@ network beyond the questions file.
 
 | Risk | What handles it |
 | --- | --- |
-| A scheduled run is late or skipped | A run every 10 minutes; a round is picked up by any later run |
+| A scheduled run is late or skipped | A run every 5 minutes; a round is picked up by any later run |
 | The questions file is slow to update | Two independent sources (GitHub API, then raw CDN), cache-busted, with retries and backoff; the fullest copy wins |
 | A round is half-published when we look | Rounds with fewer than 25 questions are left for the next run, so a guess is never locked in for a question that has not appeared yet |
 | Two runs push at once | `concurrency` queues runs; the push step rebases and retries five times |
