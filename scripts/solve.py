@@ -661,7 +661,14 @@ def main() -> int:
         with open(out, "a", encoding="utf-8") as fh:
             fh.write(f"wrote_count={len(wrote)}\n")
             fh.write(f"wrote_rounds={','.join(str(r) for r in wrote)}\n")
+            # Alert on what happened in THIS run, not on the standing list.
+            # `flagged` carries locked rounds forward from the state file, so
+            # alerting on its length would open a fresh issue every 10 minutes
+            # forever and bury any real alert.
+            new_flags = [r for r, _u in flagged if r in wrote]
             fh.write(f"flagged_count={len(flagged)}\n")
+            fh.write(f"new_flag_count={len(new_flags)}\n")
+            fh.write(f"new_flag_rounds={','.join(str(r) for r in new_flags)}\n")
             fh.write(f"rescued_count={len(rescued_rounds)}\n")
             fh.write(f"summary={json.dumps(summary)}\n")
     return 0

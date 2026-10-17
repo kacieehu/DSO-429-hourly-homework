@@ -112,8 +112,15 @@ def main() -> int:
             print(f"  {p}")
         return 1
     if flagged:
-        print("\nno missing files, but some rounds contain a guessed answer")
-        return 2
+        # Informational, deliberately NOT a failure. The solve workflow already
+        # alerts once, at the moment a round is flagged. Past its three-hour
+        # window the answer is locked and nothing can be done about it, so
+        # failing here would email the same unfixable fact three times a day
+        # and bury a real alert.
+        print("\nNote: some rounds contain a guessed answer (listed above).")
+        print("Not treated as a failure - it cannot be changed once a round's")
+        print("three-hour window has closed, and the solve run alerted at the")
+        print("time. Coverage itself is complete.")
 
     print("\nOK: every published round has a valid, complete answer file")
     return 0

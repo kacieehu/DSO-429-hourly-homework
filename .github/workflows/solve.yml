@@ -153,23 +153,39 @@ jobs:
             }
 
       - name: Open an alert issue if a new question type appeared
-        # Fires even when the LLM answered it correctly: a new template means
-        # an exact formula should be added rather than leaning on the model.
+        # Fires even when a fallback answered it correctly: a new template
+        # means an exact formula should be added rather than relying on a
+        # fallback for the rest of the week.
         if: success() && steps.solve.outputs.rescued_count != '0'
         uses: actions/github-script@v7
         with:
           script: |
             const summary = `${{ steps.solve.outputs.summary }}`;
             const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = 'New question type appeared - answered by fallback';
+            // Dedupe: a round inside its three-hour window is re-solved on
+            // every run, so creating unconditionally would spam.
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'new-template',
+            });
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open.data[0].number,
+                body: `Seen again.\n\n\`\`\`json\n${summary}\n\`\`\`\n\n${url}`,
+              });
+            } else {
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'New question type appeared - answered by LLM fallback',
+              title,
               body: [
-                'A question matched no deterministic template, so the LLM',
-                'fallback answered it. The round was submitted on time and is',
-                'very likely correct, but a formula should be added to',
-                '`scripts/solve.py` so this type becomes exact.',
+                'A question matched no known template, so it was answered by',
+                'a fallback (the offline formula search, or the LLM tier if a',
+                'key is configured). The round was submitted on time and is',
+                'very likely correct, but an exact formula should be added to',
+                '`scripts/solve.py` for this type.',
                 '',
                 'The wording is under `new_templates` below.',
                 '',
@@ -181,9 +197,12 @@ jobs:
               ].join('\n'),
               labels: ['automation-alert', 'new-template'],
             });
+            }
 
       - name: Open an alert issue if a question could not be solved at all
-        if: success() && steps.solve.outputs.flagged_count != '0'
+        # new_flag_count counts only rounds flagged in THIS run. flagged_count
+        # includes rounds locked in earlier runs and would alert forever.
+        if: success() && steps.solve.outputs.new_flag_count != '0'
         uses: actions/github-script@v7
         with:
           script: |
